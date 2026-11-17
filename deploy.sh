@@ -145,24 +145,26 @@ else
     echo "    the {proxy+} resource already exists"
 fi
 
-for METHOD in ANY GET POST PUT PATCH DELETE HEAD OPTIONS; do
+# A REST API deployment fails unless every method on the resource has an
+# integration, so the proxy integration is attached to each one.
+for METHOD in GET POST PUT PATCH DELETE HEAD OPTIONS; do
     aws apigateway put-method \
         --rest-api-id "$API_ID" \
         --resource-id "$PROXY_RESOURCE_ID" \
         --http-method "$METHOD" \
         --authorization-type NONE \
         --region "$AWS_REGION" >/dev/null 2>&1 || true
-done
 
-aws apigateway put-integration \
-    --rest-api-id "$API_ID" \
-    --resource-id "$PROXY_RESOURCE_ID" \
-    --http-method ANY \
-    --type AWS_PROXY \
-    --integration-http-method POST \
-    --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${FUNCTION_ARN}/invocations" \
-    --timeout-in-millis "$INTEGRATION_TIMEOUT_MILLIS" \
-    --region "$AWS_REGION" >/dev/null
+    aws apigateway put-integration \
+        --rest-api-id "$API_ID" \
+        --resource-id "$PROXY_RESOURCE_ID" \
+        --http-method "$METHOD" \
+        --type AWS_PROXY \
+        --integration-http-method POST \
+        --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${FUNCTION_ARN}/invocations" \
+        --timeout-in-millis "$INTEGRATION_TIMEOUT_MILLIS" \
+        --region "$AWS_REGION" >/dev/null
+done
 
 echo "==> Deploying to the default stage"
 # A REST API stage cannot be named "$default" like an HTTP API stage, so the
