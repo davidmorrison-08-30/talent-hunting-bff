@@ -22,6 +22,7 @@ import json
 import os
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 #: Backend base URL (the ALB host that routes to the backend target group).
 BACKEND_BASE_URL = os.environ.get("BACKEND_BASE_URL", "http://localhost:8000").rstrip("/")
@@ -186,22 +187,30 @@ def _event_path(event: dict[str, Any]) -> str:
 
 
 def _event_query(event: dict[str, Any]) -> str:
-    """Return the raw query string, whichever payload format is used."""
+    """Return the raw query string, whichever payload format is used.
+
+    A REST API sends payload format 1.0, which puts the query parameters in
+    top-level dictionaries. A HTTP API sends format 2.0, which puts the
+    already-encoded string in "rawQueryString".
+    """
+    # Format 1.0: multiValueQueryStringParameters keeps repeated keys.
+    multi = event.get("multiValueQueryStringParameters") or {}
+    if multi:
+        return urlencode(multi, doseq=True)
+
+    # Format 1.0: queryStringParameters holds one value per key.
+    single = event.get("queryStringParameters") or {}
+    if single:
+        return urlencode(single, doseq=True)
+
+    # Format 2.0.
     query = event.get("rawQueryString")
     if query:
         return query
 
     request_context = event.get("requestContext") or {}
     http_context = request_context.get("http") or {}
-    if http_context.get("queryString"):
-        return http_context["queryString"]
-
-    # Format 1.0 puts the query string in the request context.
-    for key in ("queryString", "query"):
-        value = request_context.get(key)
-        if value:
-            return value
-    return ""
+    return http_context.get("queryString") or ""
 
 
 def _event_method(event: dict[str, Any]) -> str:

@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -56,12 +57,13 @@ def make_rest_event(
     body: Any = None,
     headers: dict[str, str] | None = None,
     stage: str = "default",
+    query_params: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build an API Gateway REST API (payload format 1.0) event."""
     raw_body = ""
     if body is not None:
         raw_body = json.dumps(body)
-    return {
+    event: dict[str, Any] = {
         "resource": "/{proxy+}",
         "path": f"/{stage}{path}",
         "httpMethod": method,
@@ -76,6 +78,14 @@ def make_rest_event(
             "identity": {},
         },
     }
+    if query_params:
+        # A REST API puts the query in these top-level dictionaries, not in
+        # the request context.
+        event["queryStringParameters"] = dict(query_params)
+        event["multiValueQueryStringParameters"] = {
+            key: [value] for key, value in query_params.items()
+        }
+    return event
 
 
 class FakeResponse:
@@ -349,8 +359,53 @@ def test_rest_api_long_running_paths_wait_without_a_timeout(bff: Any) -> None:
 
 
 def test_rest_api_query_string_is_forwarded(bff: Any) -> None:
-    event = make_rest_event(path="/api/v1/discovery/accounts")
-    event["requestContext"]["queryString"] = "limit=25"
+    event = make_rest_event(
+        path="/api/v1/discovery/accounts", query_params={"limit": "25"}
+    )
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"[]")) as mock_open:
+        bff.handler(event, None)
+    assert mock_open.call_args[0][0].full_url.endswith(
+        "/api/v1/discovery/accounts?limit=25"
+    )
+
+
+def test_oauth_callback_query_is_forwarded(bff: Any) -> None:
+    """The callback's code and state must reach the backend.
+
+    X redirects to the callback with the authorization code in the query
+    string. A REST API puts it in the top-level query parameter dictionaries,
+    so dropping it would leave the backend without a code to exchange.
+    """
+    event = make_rest_event(
+        path="/auth/x/callback",
+        query_params={"code": "abc123", "state": "xyz789"},
+    )
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")) as mock_open:
+        bff.handler(event, None)
+    assert mock_open.call_args[0][0].full_url == (
+        "https://api.example.com/auth/x/callback?code=abc123&state=xyz789"
+    )
+
+
+def test_oauth_callback_query_values_are_encoded(bff: Any) -> None:
+    """A state value with URL-significant characters must survive."""
+    event = make_rest_event(
+        path="/auth/x/callback",
+        query_params={"code": "a+b/c=", "state": "s t&x"},
+    )
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")) as mock_open:
+        bff.handler(event, None)
+    url = mock_open.call_args[0][0].full_url
+    assert url.startswith("https://api.example.com/auth/x/callback?")
+    parsed = parse_qs(urlparse(url).query)
+    assert parsed["code"] == ["a+b/c="]
+    assert parsed["state"] == ["s t&x"]
+
+
+def test_http_api_query_string_is_still_forwarded(bff: Any) -> None:
+    """The format 2.0 behaviour must not change."""
+    event = make_event(path="/api/v1/discovery/accounts")
+    event["rawQueryString"] = "limit=25"
     with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"[]")) as mock_open:
         bff.handler(event, None)
     assert mock_open.call_args[0][0].full_url.endswith(
