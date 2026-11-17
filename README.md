@@ -3,7 +3,7 @@
 The backend-for-frontend that sits between the browser and the FastAPI backend.
 
 It runs as a single Lambda function (`talent-hunting-bff`) behind an API Gateway
-HTTP API, and forwards each request to the backend ECS service on the shared
+REST API, and forwards each request to the backend ECS service on the shared
 ALB. Its job is to keep the browser's origin rules in one place, so the
 backend never has to be exposed directly.
 
@@ -16,6 +16,20 @@ Browser -> CloudFront (/api/*) -> API Gateway -> Lambda -> ALB -> ECS backend
 The Lambda sets the `Host` header to `api.talent-hunting.internal` so the ALB
 routes the request to the backend target group.
 
+## Long-running requests
+
+Some backend calls wait on an LLM inference and can take much longer than a
+normal request. Those endpoints are forwarded without a socket timeout, so the
+browser and the gateway simply wait for the inference to finish:
+
+- `POST /api/v1/discovery/search`
+- `POST /api/v1/outreach/drafts`
+- `POST /api/v1/outreach/drafts/{id}/approve`
+- `POST /api/v1/outreach/drafts/{id}/deny`
+
+Every other endpoint keeps a 25 second timeout, so a broken backend cannot
+hang the function.
+
 ## Configuration
 
 The function reads these environment variables:
@@ -25,12 +39,6 @@ The function reads these environment variables:
 | `BACKEND_BASE_URL` | Base URL of the backend behind the shared ALB. |
 | `BACKEND_HOST_HEADER` | Host header the ALB routes on. |
 | `FRONTEND_ORIGIN` | Comma-separated list of allowed browser origins. |
-| `UPSTREAM_TIMEOUT_SECONDS` | How long to wait for the backend, in seconds. |
-
-The upstream timeout is deliberately shorter than the Lambda timeout. The
-Lambda timeout is set below the 30 second ceiling of an API Gateway HTTP API
-integration, so an upstream that hangs produces a structured `504` with
-`upstream_timeout` rather than an opaque gateway error.
 
 ## Development
 
@@ -48,8 +56,12 @@ handler and then runs `deploy.sh`. The AWS role is assumed through keyless
 OIDC, so no GitHub secret is needed.
 
 ```bash
-./deploy.sh <api-gateway-url> <backend-base-url> <frontend-origin>
+./deploy.sh <backend-base-url> <frontend-origin>
 ```
+
+The script creates a REST API (API Gateway v1) with a `{proxy+}` resource, so
+every path is forwarded to the function. The public URL is derived from the
+REST API id and printed at the end of the run.
 
 ## Layout
 

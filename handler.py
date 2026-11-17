@@ -11,6 +11,9 @@ Responsibilities:
 
 It deliberately holds no business logic and no credentials: the backend stays
 the single source of truth for the compliance rules.
+
+Endpoints whose upstream work waits on an LLM inference are forwarded without
+a socket timeout, so the caller simply waits for the inference to finish.
 """
 
 from __future__ import annotations
@@ -35,11 +38,25 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
-#: How long the backend may take before the BFF gives up, in seconds.
-#: This must stay below the API Gateway HTTP API integration cap (30s) so the
-#: function can return a real error response instead of being killed mid-flight
-#: and surfacing an opaque 503 to the caller.
-UPSTREAM_TIMEOUT_SECONDS = float(os.environ.get("UPSTREAM_TIMEOUT_SECONDS", "25"))
+#: Paths whose upstream call may run for a long time because the backend
+#: waits on LLM inference. These are forwarded without a socket timeout, so
+#: the caller simply waits for the inference to finish.
+LONG_RUNNING_PATHS = {
+    "/api/v1/discovery/search",
+    "/api/v1/outreach/drafts",
+}
+
+#: Prefix match for the per-draft endpoints. Approving a draft re-checks the
+#: guards and sending it is paced, and denying one regenerates the draft with
+#: the LLM, so both can be slow.
+LONG_RUNNING_PREFIXES = (
+    "/api/v1/outreach/drafts/",
+)
+
+#: The timeout applied to every other upstream call, in seconds. These
+#: endpoints only read from the database or the X API, so they either answer
+#: quickly or are genuinely broken.
+DEFAULT_TIMEOUT_SECONDS = 25
 
 #: Paths that are forwarded without a body validation pass.
 VALIDATED_POST_PATHS = {
@@ -134,6 +151,13 @@ def _validate_body(path: str, body: Any) -> str | None:
     return None
 
 
+def _is_long_running(path: str) -> bool:
+    """Return whether the path may wait for an LLM inference to finish."""
+    if path in LONG_RUNNING_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in LONG_RUNNING_PREFIXES)
+
+
 def _build_upstream_url(event: dict[str, Any]) -> str:
     """Rebuild the backend URL from the API Gateway event."""
     raw_path = event.get("rawPath") or "/"
@@ -208,6 +232,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     url = _build_upstream_url(event)
     headers = _forwardable_headers(event)
+    # The long-running endpoints wait for the backend without a socket
+    # timeout, so a slow inference is never cut short by the BFF.
+    timeout = None if _is_long_running(path) else DEFAULT_TIMEOUT_SECONDS
 
     try:
         import urllib.error
@@ -215,7 +242,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         data = raw_body.encode("utf-8") if raw_body else None
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(request, timeout=UPSTREAM_TIMEOUT_SECONDS) as upstream:
+        with urllib.request.urlopen(request, timeout=timeout) as upstream:
             status = upstream.status
             payload = upstream.read()
             content_type = upstream.headers.get("content-type", "application/json")
@@ -224,25 +251,6 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         status = exc.code
         payload = exc.read()
         content_type = exc.headers.get("content-type", "application/json")
-    except TimeoutError:
-        # The backend took longer than the upstream budget. API Gateway kills
-        # the integration at 30s, so the BFF must answer first with a clear
-        # error instead of being terminated and surfacing an opaque 503.
-        _log(
-            "error",
-            "upstream_timeout",
-            path=path,
-            method=method,
-            timeout_seconds=UPSTREAM_TIMEOUT_SECONDS,
-        )
-        response = _error_response(
-            504,
-            "upstream_timeout",
-            "The backend did not respond in time. The operation may still "
-            "have completed; check the run or record list before retrying.",
-        )
-        response["headers"].update(cors_headers)
-        return response
     except Exception as exc:  # noqa: BLE001
         _log("error", "upstream_request_failed", path=path, method=method, error=str(exc))
         response = _error_response(502, "upstream_error", "The backend could not be reached")

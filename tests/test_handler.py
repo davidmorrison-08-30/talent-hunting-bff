@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
@@ -231,19 +232,56 @@ def test_upstream_failure_returns_502(bff: Any) -> None:
     assert json.loads(response["body"])["error"]["code"] == "upstream_error"
 
 
-def test_upstream_timeout_returns_504(bff: Any) -> None:
-    """A slow backend must produce a clear 504, not an opaque 503.
+def test_long_running_paths_wait_without_a_socket_timeout(bff: Any) -> None:
+    """A slow inference must not be cut short by the BFF."""
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")) as mock_open:
+        bff.handler(
+            make_event(
+                path="/api/v1/discovery/search",
+                method="POST",
+                body={"target_segment": ["robotics"], "max_candidates": 1},
+            ),
+            None,
+        )
+    assert mock_open.call_args.kwargs["timeout"] is None
 
-    API Gateway kills the integration at 30s, so the BFF has to answer first.
-    """
+
+def test_per_draft_paths_wait_without_a_socket_timeout(bff: Any) -> None:
+    """Approving and denying a draft can both take a while."""
+    for path in (
+        "/api/v1/outreach/drafts/abc/approve",
+        "/api/v1/outreach/drafts/abc/deny",
+    ):
+        with patch(
+            "urllib.request.urlopen", return_value=FakeResponse(200, b"{}")
+        ) as mock_open:
+            bff.handler(make_event(path=path, method="POST"), None)
+        assert mock_open.call_args.kwargs["timeout"] is None
+
+
+def test_short_paths_keep_a_socket_timeout(bff: Any) -> None:
+    """Everything else must not be able to hang the function."""
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")) as mock_open:
+        bff.handler(make_event(path="/api/v1/discovery/accounts"), None)
+    assert mock_open.call_args.kwargs["timeout"] == bff.DEFAULT_TIMEOUT_SECONDS
+
+
+def test_there_is_no_timeout_error_path(bff: Any) -> None:
+    """The timeout response and its log were removed."""
+    assert not hasattr(bff, "UPSTREAM_TIMEOUT_SECONDS")
+    assert "upstream_timeout" not in Path(bff.__file__).read_text()
+
+
+def test_a_slow_upstream_is_not_answered_with_504(bff: Any) -> None:
+    """A timing out socket on a long-running path surfaces as a 502, not a 504."""
     with patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")):
-        response = bff.handler(make_event(), None)
-    assert response["statusCode"] == 504
-    body = json.loads(response["body"])
-    assert body["error"]["code"] == "upstream_timeout"
-    assert "did not respond in time" in body["error"]["message"]
-
-
-def test_upstream_timeout_budget_is_below_the_api_gateway_cap(bff: Any) -> None:
-    """The upstream budget must leave room for the function to answer."""
-    assert bff.UPSTREAM_TIMEOUT_SECONDS < 30
+        response = bff.handler(
+            make_event(
+                path="/api/v1/discovery/search",
+                method="POST",
+                body={"target_segment": ["robotics"], "max_candidates": 1},
+            ),
+            None,
+        )
+    assert response["statusCode"] == 502
+    assert json.loads(response["body"])["error"]["code"] == "upstream_error"

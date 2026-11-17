@@ -10,5 +10,4 @@ from __future__ import annotations
 ENVIRONMENT_VARIABLES = {
     "BACKEND_BASE_URL": "Base URL of the backend behind the shared ALB.",
     "FRONTEND_ORIGIN": "Comma-separated list of allowed browser origins.",
-    "UPSTREAM_TIMEOUT_SECONDS": "How long to wait for the backend, in seconds.",
 }

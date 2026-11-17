@@ -13,8 +13,6 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  # The public address of the API Gateway HTTP API that fronts the function.
-  API_GATEWAY_URL: https://tjayn1449g.execute-api.us-east-1.amazonaws.com
   # The shared ALB, which routes to the backend target group on the Host header.
   BACKEND_BASE_URL: http://talent-hunting-alb-176941601.us-east-1.elb.amazonaws.com
   # The CloudFront distribution that serves the SPA.
@@ -50,7 +48,6 @@ jobs:
         run: |
           chmod +x deploy.sh
           ./deploy.sh \
-            "$API_GATEWAY_URL" \
             "$BACKEND_BASE_URL" \
             "$FRONTEND_ORIGIN"
 
