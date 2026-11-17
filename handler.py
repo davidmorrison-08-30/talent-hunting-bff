@@ -158,11 +158,64 @@ def _is_long_running(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in LONG_RUNNING_PREFIXES)
 
 
+def _event_path(event: dict[str, Any]) -> str:
+    """Return the request path, whichever API Gateway payload format is used.
+
+    A REST API sends payload format 1.0, which has no "rawPath" and instead
+    puts the path in the request context. A HTTP API sends format 2.0, which
+    has "rawPath".
+    """
+    raw_path = event.get("rawPath")
+    if raw_path:
+        return raw_path
+
+    request_context = event.get("requestContext") or {}
+    # Format 1.0: requestContext.path holds "/stage/resource/path".
+    path = request_context.get("path")
+    if path:
+        stage = request_context.get("stage")
+        if stage and stage != "$default":
+            prefix = f"/{stage}"
+            if path.startswith(prefix):
+                path = path[len(prefix) :] or "/"
+        return path
+
+    # Format 2.0: requestContext.http.path holds the path without the stage.
+    http_context = request_context.get("http") or {}
+    return http_context.get("path") or "/"
+
+
+def _event_query(event: dict[str, Any]) -> str:
+    """Return the raw query string, whichever payload format is used."""
+    query = event.get("rawQueryString")
+    if query:
+        return query
+
+    request_context = event.get("requestContext") or {}
+    http_context = request_context.get("http") or {}
+    if http_context.get("queryString"):
+        return http_context["queryString"]
+
+    # Format 1.0 puts the query string in the request context.
+    for key in ("queryString", "query"):
+        value = request_context.get(key)
+        if value:
+            return value
+    return ""
+
+
+def _event_method(event: dict[str, Any]) -> str:
+    """Return the HTTP method, whichever payload format is used."""
+    request_context = event.get("requestContext") or {}
+    http_context = request_context.get("http") or {}
+    method = http_context.get("method") or request_context.get("httpMethod")
+    return method or "GET"
+
+
 def _build_upstream_url(event: dict[str, Any]) -> str:
     """Rebuild the backend URL from the API Gateway event."""
-    raw_path = event.get("rawPath") or "/"
-    query = event.get("rawQueryString") or ""
-    url = f"{BACKEND_BASE_URL}{raw_path}"
+    url = f"{BACKEND_BASE_URL}{_event_path(event)}"
+    query = _event_query(event)
     if query:
         url = f"{url}?{query}"
     return url
@@ -181,8 +234,8 @@ def _forwardable_headers(event: dict[str, Any]) -> dict[str, str]:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Proxy an API Gateway request to the backend."""
-    method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
-    path = event.get("rawPath") or "/"
+    method = _event_method(event)
+    path = _event_path(event)
     started = time.perf_counter()
 
     cors = _cors_origin(event)

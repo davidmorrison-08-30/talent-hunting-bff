@@ -50,6 +50,34 @@ def make_event(
     }
 
 
+def make_rest_event(
+    path: str = "/api/v1/health",
+    method: str = "GET",
+    body: Any = None,
+    headers: dict[str, str] | None = None,
+    stage: str = "default",
+) -> dict[str, Any]:
+    """Build an API Gateway REST API (payload format 1.0) event."""
+    raw_body = ""
+    if body is not None:
+        raw_body = json.dumps(body)
+    return {
+        "resource": "/{proxy+}",
+        "path": f"/{stage}{path}",
+        "httpMethod": method,
+        "headers": headers or {},
+        "body": raw_body or None,
+        "isBase64Encoded": False,
+        "requestContext": {
+            "stage": stage,
+            "path": f"/{stage}{path}",
+            "httpMethod": method,
+            "resourcePath": "/{proxy+}",
+            "identity": {},
+        },
+    }
+
+
 class FakeResponse:
     """Minimal stand-in for an urllib response object."""
 
@@ -285,3 +313,46 @@ def test_a_slow_upstream_is_not_answered_with_504(bff: Any) -> None:
         )
     assert response["statusCode"] == 502
     assert json.loads(response["body"])["error"]["code"] == "upstream_error"
+
+
+def test_rest_api_event_paths_are_forwarded_without_the_stage(
+    bff: Any,
+) -> None:
+    """A REST API event carries the stage in its path; it must be stripped."""
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")) as mock_open:
+        bff.handler(make_rest_event(path="/health"), None)
+    assert mock_open.call_args[0][0].full_url == "https://api.example.com/health"
+
+
+def test_rest_api_event_method_is_read_from_the_request_context(bff: Any) -> None:
+    event = make_rest_event(path="/api/v1/discovery/search", method="POST", body={})
+    response = bff.handler(event, None)
+    # The body is invalid, so the validation error proves the method and the
+    # path were read correctly from the format 1.0 event.
+    assert response["statusCode"] == 422
+
+
+def test_rest_api_long_running_paths_wait_without_a_timeout(bff: Any) -> None:
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")) as mock_open:
+        bff.handler(
+            make_rest_event(
+                path="/api/v1/discovery/search",
+                method="POST",
+                body={"target_segment": ["robotics"], "max_candidates": 1},
+            ),
+            None,
+        )
+    assert mock_open.call_args.kwargs["timeout"] is None
+    assert mock_open.call_args[0][0].full_url == (
+        "https://api.example.com/api/v1/discovery/search"
+    )
+
+
+def test_rest_api_query_string_is_forwarded(bff: Any) -> None:
+    event = make_rest_event(path="/api/v1/discovery/accounts")
+    event["requestContext"]["queryString"] = "limit=25"
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"[]")) as mock_open:
+        bff.handler(event, None)
+    assert mock_open.call_args[0][0].full_url.endswith(
+        "/api/v1/discovery/accounts?limit=25"
+    )
