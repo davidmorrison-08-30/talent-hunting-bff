@@ -157,7 +157,7 @@ aws apigateway put-integration \
     --http-method ANY \
     --type AWS_PROXY \
     --integration-http-method POST \
-    --uri "$FUNCTION_ARN" \
+    --uri "arn:aws:apigateway:${AWS_REGION}:lambda:path/2015-03-31/functions/${FUNCTION_ARN}/invocations" \
     --timeout-in-millis "$INTEGRATION_TIMEOUT_MILLIS" \
     --region "$AWS_REGION" >/dev/null
 
