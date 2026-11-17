@@ -18,6 +18,9 @@ BACKEND_HOST_HEADER="${BACKEND_HOST_HEADER:-api.talent-hunting.internal}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 FUNCTION_NAME="talent-hunting-bff"
 API_NAME="talent-hunting-bff-api"
+#: The REST API stage. A REST API stage cannot be named "$default", so the
+#: stage is called "default" and appears in the public URL as a path segment.
+STAGE_NAME="default"
 ROLE_NAME="talent-hunting-bff-role"
 LOG_GROUP="/aws/lambda/talent-hunting-bff"
 
@@ -161,10 +164,12 @@ aws apigateway put-integration \
     --timeout-in-millis "$INTEGRATION_TIMEOUT_MILLIS" \
     --region "$AWS_REGION" >/dev/null
 
-echo "==> Deploying to the \$default stage"
+echo "==> Deploying to the default stage"
+# A REST API stage cannot be named "$default" like an HTTP API stage, so the
+# stage is called "default" and the URL carries it as a path segment.
 DEPLOYMENT_ID="$(aws apigateway create-deployment \
     --rest-api-id "$API_ID" \
-    --stage-name '$default' \
+    --stage-name "$STAGE_NAME" \
     --region "$AWS_REGION" \
     --query 'id' --output text)"
 echo "    deployment $DEPLOYMENT_ID"
@@ -176,6 +181,8 @@ REST_API_URL="$(aws apigateway get-rest-api --rest-api-id "$API_ID" --region "$A
 if [ -z "$REST_API_URL" ] || [ "$REST_API_URL" = "None" ]; then
     REST_API_URL="https://${API_ID}.execute-api.${AWS_REGION}.amazonaws.com"
 fi
+# The stage is part of the path, unlike an HTTP API's $default stage.
+REST_API_URL="${REST_API_URL}/${STAGE_NAME}"
 
 echo
 echo "BFF deployed."
