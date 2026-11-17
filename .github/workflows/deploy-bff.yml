@@ -1,0 +1,62 @@
+name: Deploy BFF to Lambda
+
+# Packages the BFF handler and deploys it to the Lambda function behind the
+# API Gateway HTTP API.
+#
+# The deployment values are public infrastructure addresses, not secrets, so
+# no GitHub secret is needed. The AWS role is assumed through keyless OIDC.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  # The public address of the API Gateway HTTP API that fronts the function.
+  API_GATEWAY_URL: https://tjayn1449g.execute-api.us-east-1.amazonaws.com
+  # The shared ALB, which routes to the backend target group on the Host header.
+  BACKEND_BASE_URL: http://talent-hunting-alb-176941601.us-east-1.elb.amazonaws.com
+  # The CloudFront distribution that serves the SPA.
+  FRONTEND_ORIGIN: https://d16py48op66f2g.cloudfront.net
+
+jobs:
+  deploy:
+    name: Deploy the BFF
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv run --with pytest python -m pytest tests/ -q
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::752919052098:role/github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy
+        run: |
+          chmod +x deploy.sh
+          ./deploy.sh \
+            "$API_GATEWAY_URL" \
+            "$BACKEND_BASE_URL" \
+            "$FRONTEND_ORIGIN"
+
+      - name: Verify the function
+        run: |
+          aws lambda get-function-configuration \
+            --function-name talent-hunting-bff \
+            --region "$AWS_REGION" \
+            --query '{timeout:Timeout,memory:MemorySize,env:Environment.Variables}'
