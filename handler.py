@@ -97,17 +97,17 @@ def _log(level: str, message: str, **fields: Any) -> None:
     print(json.dumps(payload, default=str))
 
 
-def _cors_origin(event: dict[str, Any]) -> str | None:
-    """Return the allowed origin for this request, if any."""
-    headers = event.get("headers") or {}
-    origin = headers.get("origin") or headers.get("Origin")
-    if not origin:
-        return None
-    if "*" in ALLOWED_ORIGINS:
-        return "*"
-    if origin in ALLOWED_ORIGINS:
-        return origin
-    return None
+# def _cors_origin(event: dict[str, Any]) -> str | None:
+#     """Return the allowed origin for this request, if any."""
+#     headers = event.get("headers") or {}
+#     origin = headers.get("origin") or headers.get("Origin")
+#     if not origin:
+#         return None
+#     if "*" in ALLOWED_ORIGINS:
+#         return "*"
+#     if origin in ALLOWED_ORIGINS:
+#         return origin
+#     return None
 
 
 def _error_response(status: int, code: str, message: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -247,13 +247,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     path = _event_path(event)
     started = time.perf_counter()
 
-    cors = _cors_origin(event)
+    # cors = _cors_origin(event)
     cors_headers: dict[str, str] = {}
     if cors:
         cors_headers = {
-            "access-control-allow-origin": cors,
-            "access-control-allow-headers": "content-type,authorization",
-            "access-control-allow-methods": "GET,POST,OPTIONS,DELETE,PATCH",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token",
+            "Access-Control-Allow-Methods": "GET,POST,OPTIONS,DELETE,PATCH",
             "vary": "Origin",
         }
 
