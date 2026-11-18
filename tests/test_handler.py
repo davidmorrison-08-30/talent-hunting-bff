@@ -120,6 +120,85 @@ def test_disallowed_origin_gets_no_cors_header(bff: Any) -> None:
     assert "Access-Control-Allow-Origin" not in response["headers"]
 
 
+def test_a_proxied_response_carries_the_cors_header(bff: Any) -> None:
+    """A successful proxy must be readable by the browser."""
+    event = make_event(headers={"origin": "https://app.example.com"})
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")):
+        response = bff.handler(event, None)
+    assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
+
+
+def test_a_proxied_backend_error_carries_the_cors_header(bff: Any) -> None:
+    """A backend error must be readable too, otherwise it looks like a network failure."""
+    import urllib.error
+
+    envelope = json.dumps({"error": {"code": "duplicate_outreach", "message": "x"}}).encode()
+    error = urllib.error.HTTPError(
+        "https://api.example.com/x", 409, "Conflict", {}, None  # type: ignore[arg-type]
+    )
+    error.read = lambda: envelope  # type: ignore[method-assign]
+
+    event = make_event(
+        path="/api/v1/outreach/drafts",
+        method="POST",
+        body={"x_user_id": "1"},
+        headers={"origin": "https://app.example.com"},
+    )
+    with patch("urllib.request.urlopen", side_effect=error):
+        response = bff.handler(event, None)
+
+    assert response["statusCode"] == 409
+    assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
+
+
+def test_an_upstream_failure_carries_the_cors_header(bff: Any) -> None:
+    """A 502 from the BFF must not look like a CORS failure in the browser."""
+    event = make_event(headers={"origin": "https://app.example.com"})
+    with patch("urllib.request.urlopen", side_effect=OSError("no route")):
+        response = bff.handler(event, None)
+    assert response["statusCode"] == 502
+    assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
+
+
+def test_a_validation_error_carries_the_cors_header(bff: Any) -> None:
+    """A rejected request must be readable by the browser."""
+    event = make_event(
+        path="/api/v1/discovery/search",
+        method="POST",
+        body={},
+        headers={"origin": "https://app.example.com"},
+    )
+    response = bff.handler(event, None)
+    assert response["statusCode"] == 422
+    assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
+
+
+def test_the_allowed_origin_is_echoed_not_wildcarded(bff: Any) -> None:
+    """A wildcard cannot be combined with credentials and must not be used."""
+    event = make_event(headers={"origin": "https://app.example.com"})
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")):
+        response = bff.handler(event, None)
+    assert response["headers"]["Access-Control-Allow-Origin"] != "*"
+    assert response["headers"]["Vary"] == "Origin"
+
+
+def test_an_accepted_search_is_passed_through_with_its_status(bff: Any) -> None:
+    """A search that is still running answers 202 and the browser must read it."""
+    body = json.dumps({"run_id": "r1", "status": "RUNNING"}).encode()
+    event = make_event(
+        path="/api/v1/discovery/search",
+        method="POST",
+        body={"target_segment": ["robotics"], "max_candidates": 1},
+        headers={"origin": "https://app.example.com"},
+    )
+    with patch("urllib.request.urlopen", return_value=FakeResponse(202, body)):
+        response = bff.handler(event, None)
+
+    assert response["statusCode"] == 202
+    assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
+    assert json.loads(response["body"])["status"] == "RUNNING"
+
+
 def test_successful_proxy_passes_body_through(bff: Any) -> None:
     payload = json.dumps({"status": "ok"}).encode()
     with patch("urllib.request.urlopen", return_value=FakeResponse(200, payload)) as mock_open:

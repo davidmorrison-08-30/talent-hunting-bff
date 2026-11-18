@@ -97,17 +97,41 @@ def _log(level: str, message: str, **fields: Any) -> None:
     print(json.dumps(payload, default=str))
 
 
-# def _cors_origin(event: dict[str, Any]) -> str | None:
-#     """Return the allowed origin for this request, if any."""
-#     headers = event.get("headers") or {}
-#     origin = headers.get("origin") or headers.get("Origin")
-#     if not origin:
-#         return None
-#     if "*" in ALLOWED_ORIGINS:
-#         return "*"
-#     if origin in ALLOWED_ORIGINS:
-#         return origin
-#     return None
+def _cors_origin(event: dict[str, Any]) -> str | None:
+    """Return the allowed origin for this request, if any.
+
+    The browser sends the request's origin in the ``Origin`` header and the
+    response must carry it back in ``Access-Control-Allow-Origin``. The origin
+    is echoed rather than answered with a wildcard, because a wildcard is
+    rejected by the browser for credentialed requests and cannot be combined
+    with ``Access-Control-Allow-Credentials``.
+    """
+    headers = event.get("headers") or {}
+    origin = headers.get("origin") or headers.get("Origin")
+    if not origin:
+        return None
+    if "*" in ALLOWED_ORIGINS:
+        return "*"
+    if origin in ALLOWED_ORIGINS:
+        return origin
+    return None
+
+
+def _cors_headers(event: dict[str, Any]) -> dict[str, str]:
+    """Build the CORS headers for a response to this request.
+
+    An empty mapping means the request's origin is not allowed, so no CORS
+    header is sent and the browser blocks the response on its own.
+    """
+    origin = _cors_origin(event)
+    if not origin:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Headers": "Content-Type,Authorization",
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS,DELETE,PATCH",
+        "Vary": "Origin",
+    }
 
 
 def _error_response(status: int, code: str, message: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -247,15 +271,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     path = _event_path(event)
     started = time.perf_counter()
 
-    # cors = _cors_origin(event)
-    cors_headers: dict[str, str] = {}
-    if cors:
-        cors_headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token",
-            "Access-Control-Allow-Methods": "GET,POST,OPTIONS,DELETE,PATCH",
-            "vary": "Origin",
-        }
+    # Every response the function returns carries the CORS headers, so the
+    # browser can read a proxied result and a proxied error alike. An origin
+    # that is not allowed gets no CORS header at all.
+    cors_headers = _cors_headers(event)
 
     if method == "OPTIONS":
         return {
