@@ -157,8 +157,16 @@ def _validate_body(path: str, body: Any) -> str | None:
     if path == "/api/v1/discovery/search":
         segment = body.get("target_segment") or []
         seeds = body.get("seed_accounts") or []
-        if not isinstance(segment, list) or not isinstance(seeds, list):
-            return "'target_segment' and 'seed_accounts' must be lists"
+        known_humans = body.get("known_human_accounts") or []
+        if (
+            not isinstance(segment, list)
+            or not isinstance(seeds, list)
+            or not isinstance(known_humans, list)
+        ):
+            return (
+                "'target_segment', 'seed_accounts' and 'known_human_accounts' "
+                "must be lists"
+            )
         if not segment and not seeds:
             return "Provide at least one of 'target_segment' or 'seed_accounts'"
         for field, low, high in DISCOVERY_LIMIT_FIELDS:

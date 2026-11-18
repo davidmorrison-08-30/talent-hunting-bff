@@ -254,6 +254,39 @@ def test_discovery_accepts_minimal_limits(bff: Any) -> None:
     assert response["statusCode"] == 200
 
 
+def test_discovery_accepts_known_human_accounts(bff: Any) -> None:
+    """The known-human list is forwarded like any other list field."""
+    event = make_event(
+        path="/api/v1/discovery/search",
+        method="POST",
+        body={
+            "target_segment": ["robotics"],
+            "seed_accounts": ["https://x.com/someone"],
+            "known_human_accounts": ["https://x.com/someone", "@other"],
+        },
+    )
+    with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")):
+        response = bff.handler(event, None)
+    assert response["statusCode"] == 200
+
+
+def test_discovery_rejects_a_non_list_known_human_accounts(bff: Any) -> None:
+    """A string where a list belongs is refused before the backend is called."""
+    event = make_event(
+        path="/api/v1/discovery/search",
+        method="POST",
+        body={
+            "target_segment": ["robotics"],
+            "known_human_accounts": "https://x.com/someone",
+        },
+    )
+    with patch("urllib.request.urlopen") as mock_open:
+        response = bff.handler(event, None)
+    assert response["statusCode"] == 422
+    assert "known_human_accounts" in json.loads(response["body"])["error"]["message"]
+    mock_open.assert_not_called()
+
+
 def test_discovery_rejects_limits_below_the_minimum(bff: Any) -> None:
     """A zero candidate count would still cost a search call, so it is refused."""
     event = make_event(
