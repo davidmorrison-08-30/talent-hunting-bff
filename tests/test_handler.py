@@ -110,14 +110,14 @@ def test_options_returns_no_content(bff: Any) -> None:
     event = make_event(method="OPTIONS", headers={"origin": "https://app.example.com"})
     response = bff.handler(event, None)
     assert response["statusCode"] == 204
-    assert response["headers"]["access-control-allow-origin"] == "https://app.example.com"
+    assert response["headers"]["Access-Control-Allow-Origin"] == "https://app.example.com"
 
 
 def test_disallowed_origin_gets_no_cors_header(bff: Any) -> None:
     event = make_event(headers={"origin": "https://evil.example.com"})
     with patch("urllib.request.urlopen", return_value=FakeResponse(200, b"{}")):
         response = bff.handler(event, None)
-    assert "access-control-allow-origin" not in response["headers"]
+    assert "Access-Control-Allow-Origin" not in response["headers"]
 
 
 def test_successful_proxy_passes_body_through(bff: Any) -> None:
