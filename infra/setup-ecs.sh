@@ -69,7 +69,6 @@ cat > /tmp/tr-backend-task.json <<JSON
       "portMappings": [{"containerPort": 8000, "protocol": "tcp"}],
       "environment": [
         {"name": "RUN_MIGRATIONS_ON_STARTUP", "value": "true"},
-        {"name": "ENABLE_DISPATCHER", "value": "true"},
         {"name": "AWS_REGION", "value": "${AWS_REGION}"},
         {"name": "DEBUG", "value": "false"},
         {"name": "LOG_LEVEL", "value": "INFO"}
